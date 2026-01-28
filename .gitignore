@@ -1,0 +1,45 @@
+### Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pkl
+
+### Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+### Jupyter
+.ipynb_checkpoints/
+*.ipynb_convert/
+
+### IDE & editor
+.vscode/
+.idea/
+*.iml
+
+### OS files
+.DS_Store
+Thumbs.db
+
+### Logs
+logs/
+*.log
+
+### Data (raw / large)
+data/
+!data/.gitkeep
+
+### Models & checkpoints
+models/
+checkpoints/
+
+### Spark / XGBoost artifacts
+spark-warehouse/
+metastore_db/
+derby.log
+*.crc
+_SUCCESS
+
