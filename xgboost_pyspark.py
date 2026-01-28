@@ -13,11 +13,23 @@ from pyspark.ml.feature import (
     VectorAssembler,
     MinMaxScaler,
     StringIndexer,
-    Imputer
+    Imputer,
 )
 from pyspark.ml import Pipeline, PipelineModel
-from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
+from pyspark.ml.evaluation import (
+    BinaryClassificationEvaluator,
+    MulticlassClassificationEvaluator,
+)
 
+from feature_store import (
+    get_minio_client,
+    ensure_bucket,
+    upload_local_file,
+    upload_spark_df_as_parquet,
+    make_raw_key,
+    make_features_prefix,
+    make_model_prefix,
+)
 try:
     from xgboost.spark import SparkXGBClassifier
 except ImportError as e:
@@ -323,6 +335,12 @@ def main():
     parser.add_argument('--learning-rate', type=float, default=0.3, help='Learning rate')
     parser.add_argument('--random-state', type=int, default=42, help='Random state for reproducibility')
     parser.add_argument('--show-samples', action='store_true', help='Show sample predictions')
+
+    # Feature Store / MinIO options
+    parser.add_argument('--feature-store-enabled', action='store_true', help='Enable integration with MinIO-based Feature Store')
+    parser.add_argument('--fs-bucket', type=str, default='feature-store', help='MinIO bucket for Feature Store')
+    parser.add_argument('--fs-dataset-name', type=str, default='lending_club', help='Dataset name for raw/features paths')
+    parser.add_argument('--fs-version', type=str, default='v1', help='Version tag for raw/features/models')
     
     args = parser.parse_args()
     
@@ -333,12 +351,55 @@ def main():
     
     try:
         df = load_data(spark, args.data_path)
+
+        # Optionally save raw dataset file to Feature Store
+        if args.feature_store_enabled:
+            client = get_minio_client()
+            ensure_bucket(client, args.fs_bucket)
+            raw_key = make_raw_key(
+                dataset_name=args.fs_dataset_name,
+                version=args.fs_version,
+                filename=os.path.basename(args.data_path),
+            )
+            logger.info(f"Uploading raw data file to MinIO: s3://{args.fs_bucket}/{raw_key}")
+            upload_local_file(
+                client=client,
+                bucket=args.fs_bucket,
+                local_path=args.data_path,
+                object_name=raw_key,
+            )
         df_clean = remove_outliers(df)
         preprocessed_df, feature_cols, pipeline_model = preprocess_data(df_clean, target_col=args.target_col)
         
         train_ratio = args.train_split
         test_ratio = 1 - train_ratio
         train_df, test_df = preprocessed_df.randomSplit([train_ratio, test_ratio], seed=args.random_state)
+
+        # Optionally save prepared features to Feature Store as parquet
+        if args.feature_store_enabled:
+            logger.info("Uploading preprocessed features (train/test) to MinIO as parquet")
+            features_train_prefix = make_features_prefix(
+                dataset_name=args.fs_dataset_name,
+                split="train",
+                version=args.fs_version,
+            )
+            features_test_prefix = make_features_prefix(
+                dataset_name=args.fs_dataset_name,
+                split="test",
+                version=args.fs_version,
+            )
+            upload_spark_df_as_parquet(
+                df=train_df,
+                bucket=args.fs_bucket,
+                object_prefix=features_train_prefix,
+                mode="overwrite",
+            )
+            upload_spark_df_as_parquet(
+                df=test_df,
+                bucket=args.fs_bucket,
+                object_prefix=features_test_prefix,
+                mode="overwrite",
+            )
         
         logger.info(f"Train set size: {train_df.count()}")
         logger.info(f"Test set size: {test_df.count()}")
@@ -358,6 +419,32 @@ def main():
         if args.model_path:
             logger.info(f"Saving model to {args.model_path}")
             xgb_model.write().overwrite().save(args.model_path)
+
+            if args.feature_store_enabled:
+                # We store the Spark model folder itself under models/ in MinIO
+                client = get_minio_client()
+                ensure_bucket(client, args.fs_bucket)
+                model_prefix = make_model_prefix(
+                    model_name="xgboost_spark",
+                    version=args.fs_version,
+                )
+                logger.info(f"Uploading trained model directory to MinIO under prefix: {model_prefix}")
+
+                import pathlib
+
+                model_dir = pathlib.Path(args.model_path)
+                if model_dir.exists():
+                    for root, _, files in os.walk(model_dir):
+                        for f in files:
+                            full_path = pathlib.Path(root) / f
+                            rel_path = full_path.relative_to(model_dir)
+                            object_name = f"{model_prefix.rstrip('/')}/{rel_path.as_posix()}"
+                            upload_local_file(
+                                client=client,
+                                bucket=args.fs_bucket,
+                                local_path=str(full_path),
+                                object_name=object_name,
+                            )
         
         logger.info("Pipeline completed successfully")
         

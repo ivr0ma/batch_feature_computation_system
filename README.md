@@ -124,6 +124,66 @@ python xgboost_pyspark.py \
 python xgboost_pyspark.py --data-path data/lending_club_loan_two.csv --model-path models/xgboost_model
 ```
 
+### Интеграция с локальным Feature Store (MinIO)
+
+Для локального хранения сырых данных, подготовленных фичей и обученных моделей используется MinIO (S3-совместимое хранилище).
+
+#### 1. Запуск MinIO через Docker
+
+В корне проекта есть `docker-compose.yml`. Запуск:
+
+```bash
+docker compose up -d
+```
+
+По умолчанию:
+
+- S3 API: `http://localhost:9000`
+- Web-консоль: `http://localhost:9001`
+- Пользователь: `minioadmin`
+- Пароль: `minioadmin`
+
+Зайди в web-консоль и создай bucket `feature-store` (или используй своё имя, см. опции ниже).
+
+#### 2. Переменные окружения для MinIO (необязательно)
+
+По умолчанию используются:
+
+- `MINIO_ENDPOINT=localhost:9000`
+- `MINIO_ACCESS_KEY=minioadmin`
+- `MINIO_SECRET_KEY=minioadmin`
+- `MINIO_SECURE=false`
+
+Можно переопределить их через переменные окружения.
+
+#### 3. Запуск пайплайна с записью в Feature Store
+
+Добавлены опции:
+
+- `--feature-store-enabled` – включить интеграцию с MinIO
+- `--fs-bucket` – bucket для Feature Store (по умолчанию: `feature-store`)
+- `--fs-dataset-name` – название датасета (по умолчанию: `lending_club`)
+- `--fs-version` – версия/тег данных и модели (по умолчанию: `v1`)
+
+Пример запуска:
+
+```bash
+python xgboost_pyspark.py \
+    --data-path data/lending_club_loan_two.csv \
+    --model-path models/xgboost_model \
+    --feature-store-enabled \
+    --fs-bucket feature-store \
+    --fs-dataset-name lending_club \
+    --fs-version v1
+```
+
+В этом режиме скрипт:
+
+- загружает сырые данные из `data/lending_club_loan_two.csv`;
+- сохраняет исходный CSV в MinIO по пути `raw/{dataset_name}/{version}/...`;
+- сохраняет подготовленные train/test фичи в parquet по путям `features/{dataset_name}/train/{version}/...` и `features/{dataset_name}/test/{version}/...`;
+- при указании `--model-path` дополнительно загружает обученную Spark XGBoost модель в MinIO под `models/xgboost_spark/{version}/...`.
+
 Использовать GPU и показать примеры:
 ```bash
 python xgboost_pyspark.py --data-path data/lending_club_loan_two.csv --use-gpu --show-samples
