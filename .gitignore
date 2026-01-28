@@ -43,3 +43,6 @@ derby.log
 *.crc
 _SUCCESS
 
+### Personal docs
+dev_docs/
+
